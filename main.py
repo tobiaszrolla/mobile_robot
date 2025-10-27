@@ -1,32 +1,24 @@
-from mobile_robot import MobileRobot
-import numpy as np
-import matplotlib
-matplotlib.use("Agg")
+from world.WorldFactory import WorldFactory
 import matplotlib.pyplot as plt
+from world.obstacles import CircularObstacle, RectangularObstacle
 
-robot = MobileRobot(speed_max=10, accel_max=1, wheel_base=2.5)
+# Tworzymy losowy świat
+world = WorldFactory.create_random_world(width=100, length=200, num_circles=3, num_rects=2, seed=42)
 
-x0 = np.array([0.0, 0.0, 0.0])
+# Rysujemy przeszkody
+plt.figure(figsize=(8,6))
+for obs in world.obstacles:
+    if isinstance(obs, CircularObstacle):
+        circle = plt.Circle(obs.position, obs.radius, color='r', alpha=0.5)
+        plt.gca().add_patch(circle)
+    elif isinstance(obs, RectangularObstacle):
+        rect = plt.Rectangle(obs.position, obs.width, obs.height, color='b', alpha=0.5)
+        plt.gca().add_patch(rect)
 
-control = np.array([0.5, np.deg2rad(20)]) 
-
-trajectory = robot.run(T=10, x0=x0, control=control)
-
-print("Trajectory shape:", trajectory.shape)
-print("First 5 states:\n", trajectory[:5])
-
-x = trajectory[:, 0]
-y = trajectory[:, 1]
-
-plt.figure(figsize=(6,6))
-plt.plot(x, y, label="Robot path")
-plt.scatter(x[0], y[0], color="green", label="Start") 
-plt.scatter(x[-1], y[-1], color="red", label="End")    
-plt.xlabel("x [m]")
-plt.ylabel("y [m]")
-plt.title("Robot position over time")
-plt.axis("equal")
-plt.legend()
-plt.grid(True)
-plt.savefig("trajectory_positions.png")
-plt.close()
+plt.xlim(0, world.width)
+plt.ylim(0, world.lenght)
+plt.xlabel("x")
+plt.ylabel("y")
+plt.title("Random World with obstacles")
+plt.gca().set_aspect('equal', adjustable='box')
+plt.savefig("world.png")
