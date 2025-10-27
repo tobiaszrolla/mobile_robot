@@ -1,0 +1,23 @@
+# Virtual environment
+venv/
+.env/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.yml
+
+# System Files
+.DS_Store
+*.swp
+*.swo
+*.idea/
+*.vscode/
+
+# GitHub Actions folder
+.github/
+
+#Image Files
+*.png
