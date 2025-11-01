@@ -15,14 +15,18 @@ class MobileRobot(VehicleBase):
     def u_limited(self, u):
         accel, steering = u
         accel = np.clip(accel, -self.accel_max, self.accel_max)
+        steering = (steering + np.pi) % (2 * np.pi) - np.pi  # skręt w zakresie -pi do pi
         steering = np.clip(steering, self.min_steering, self.max_steering)
         return np.array([accel, steering])
 
     def deriv(self, state, control):
-        x, y, heading = state
-        accel, steering = control
+        x, y, heading = state  # heading in radians
 
-        self.speed += accel * 0.1
+        # Ograniczenie sterowania do fizycznych możliwości robota
+        control = self.u_limited(control)
+        accel, steering = control  # steering in radians
+
+        self.speed = np.clip(self.speed+accel * 0.1, 0,self.speed_max)
 
         dx = self.speed * np.cos(heading)
         dy = self.speed * np.sin(heading)
