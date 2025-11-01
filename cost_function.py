@@ -6,10 +6,9 @@ def compute_cost(state, control, goal, world=None, weights=None):
         weights = {
             'w_goal': 5.0,
             'w_energy': 3.0,
-            # 'w.time': 0.1
         }
 
-    x, y , heading = state
+    x, y, heading = state
     accel, steering = control
 
     goal_dist = np.linalg.norm([goal[0] - x, goal[1] - y])

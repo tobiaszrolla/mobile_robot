@@ -62,9 +62,9 @@ def run_simulation(goal=(25.0, 25.0), starting_state=None, world=None, visualize
     if visualize:
         print(f"\nŁączny koszt trajektorii: {total_cost:.2f}")
         print(f"Średni koszt na krok: {np.mean(cost_values):.3f}")
-        plot_trajectory(trajectory, speed_values, goal)
+        plot_trajectory(trajectory, speed_values, goal, world=world)
         plot_speed(time, speed_values)
-        plot_animation(trajectory, goal)
+        plot_animation(trajectory, goal, world=world)
         plot_cost(time, cost_values)
 
     return result
