@@ -19,7 +19,7 @@ def train_ppo(episodes=2000, max_steps=60, update_every=1024, goal=(50.0, 75.0),
     while True:
         world = WorldFactory.create_random_world(width=100, length=200, num_circles=3, num_rects=2, seed=seed)
         # Start in the middle of the width, slightly up from bottom
-        start_state = np.array([5.0, 10.0, np.deg2rad(90.0)])
+        start_state = np.array([2.0, 2.0, np.deg2rad(90.0)])
         
         # Check if start is safe (obstacles AND bounds)
         if not world.check_collision(start_state[:2]) and world.is_inside_bounds(start_state[:2]):
@@ -112,13 +112,13 @@ def train_ppo(episodes=2000, max_steps=60, update_every=1024, goal=(50.0, 75.0),
                     next_value = 0.0
                 
                 # Perform PPO update
-                policy_loss, value_loss, entropy = ppo_robot.update(next_value)
+                p_loss, v_loss, _ = ppo_robot.update(next_value)
                 
-                if policy_loss is not None:
-                    policy_losses.append(policy_loss)
-                    value_losses.append(value_loss)
-                    print(f"  [Update {len(policy_losses)}] Policy: {policy_loss:.4f}, "
-                          f"Value: {value_loss:.4f}, Entropy: {entropy:.4f}")
+                if p_loss is not None:
+                    policy_losses.append(p_loss)
+                    value_losses.append(v_loss)
+                    print(f"  [Update {len(policy_losses)}] Policy: {p_loss:.4f}, "
+                          f"Value: {v_loss:.4f}")
             
             if done:
                 break
@@ -330,9 +330,9 @@ def train_ppo(episodes=2000, max_steps=60, update_every=1024, goal=(50.0, 75.0),
 
 if __name__ == "__main__":
     trained_robot, world = train_ppo(
-        episodes=3000,
-        max_steps=300,      # Increased for complex maneuvers
-        update_every=2048,   # Update less frequently (more stable)
+        episodes=1600,
+        max_steps=400,      # Increased to 400
+        update_every=2048,
         goal=(50.0, 75.0),
         save_path='ppo_model.pth'
     )

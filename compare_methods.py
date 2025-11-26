@@ -19,7 +19,7 @@ def compute_path_length(trajectory):
                for i in range(len(trajectory) - 1))
 
 
-def evaluate_ppo(ppo_robot, world, start_state, goal, max_steps=300):
+def evaluate_ppo(ppo_robot, world, start_state, goal, max_steps=500):
     """Evaluate trained PPO agent."""
     robot = MobileRobot()
     state = np.array(start_state)
@@ -57,6 +57,70 @@ def evaluate_ppo(ppo_robot, world, start_state, goal, max_steps=300):
     return np.array(trajectory), float('inf'), False
 
 
+def follow_path(robot, path, world, start_state, goal_threshold=2.0):
+    """
+    Simulate robot following a geometric path.
+    Simple Pure Pursuit-like controller.
+    """
+    # Use actual start state (x, y, heading)
+    state = np.array(start_state)
+    trajectory = [state.copy()]
+    
+    current_idx = 0
+    lookahead_dist = 1.5  # Reduced from 3.0 to avoid cutting corners
+    
+    max_steps = 1000
+    dt = 0.1
+    
+    for step in range(max_steps):
+        # Find target point on path
+        # Simple logic: find first point further than lookahead distance
+        target_point = path[-1] # Default to end
+        
+        for i in range(current_idx, len(path)):
+            dist = np.hypot(path[i][0] - state[0], path[i][1] - state[1])
+            if dist > lookahead_dist:
+                target_point = path[i]
+                current_idx = i
+                break
+        
+        # Control logic
+        dx = target_point[0] - state[0]
+        dy = target_point[1] - state[1]
+        target_heading = np.arctan2(dy, dx)
+        
+        heading_error = (target_heading - state[2] + np.pi) % (2 * np.pi) - np.pi
+        
+        # P-controller for steering
+        steer = np.clip(heading_error * 2.0, -robot.max_steering, robot.max_steering)
+        
+        # Simple speed control: slow down if turning
+        target_speed = robot.speed_max
+        if abs(heading_error) > np.deg2rad(20):
+            target_speed *= 0.5
+            
+        accel = np.clip((target_speed - robot.speed), -robot.accel_max, robot.accel_max)
+        
+        # Execute
+        action = np.array([accel, steer])
+        deriv = robot.deriv(state, action)
+        state = state + deriv * dt
+        
+        trajectory.append(state.copy())
+        
+        # Check goal
+        dist_to_goal = np.hypot(path[-1][0] - state[0], path[-1][1] - state[1])
+        if dist_to_goal < goal_threshold:
+            # Add final point to trajectory to close the gap for metric calculation
+            trajectory.append(np.array([path[-1][0], path[-1][1], state[2]]))
+            return np.array(trajectory), True
+            
+        if not world.is_inside_bounds(state[:2]) or world.check_collision(state[:2]):
+            print(f"  Collision at {state[:2]}")
+            return np.array(trajectory), False
+            
+    return np.array(trajectory), False
+
 def compare_dijkstra_vs_ppo(goal=(50.0, 75.0), start_state=[50.0, 10.0, np.deg2rad(90)],
                              ppo_model_path='ppo_model.pth', train_ppo_if_missing=False,
                              train_episodes=1500, dijkstra_debug=True):
@@ -64,8 +128,6 @@ def compare_dijkstra_vs_ppo(goal=(50.0, 75.0), start_state=[50.0, 10.0, np.deg2r
     Compare PURE SHORTEST PATHS: Dijkstra (optimal) vs PPO (learned).
     """
     # Create world
-    # Use the same seed logic as training to ensure we get the same "safe" world if possible
-    # But for comparison, we'll just use the fixed seed 42 and hope it's safe with the new start
     world = WorldFactory.create_random_world(width=100, length=200, num_circles=3, num_rects=2, seed=42)
     start_state = np.array(start_state)
     goal = np.array(goal)
@@ -80,30 +142,51 @@ def compare_dijkstra_vs_ppo(goal=(50.0, 75.0), start_state=[50.0, 10.0, np.deg2r
     print(f"Straight-line distance: {straight_dist:.1f}m")
     print("="*70)
     
+    # Check validity
+    if world.check_collision(start_state[:2]):
+        print("⚠ WARNING: Start position is inside an obstacle!")
+    if world.check_collision(goal):
+        print("⚠ WARNING: Goal position is inside an obstacle!")
+    
     results = {}
     
-    # 1. Dijkstra (Optimal Shortest Path)
+    # 1. Dijkstra (Optimal Geometric Path)
     print("\n" + "="*60)
-    print("Running Dijkstra - Optimal Shortest Path")
+    print("Running Dijkstra - Optimal Geometric Path")
     print("="*60)
-    dijkstra = DijkstraPlanner(world, goal, debug=dijkstra_debug)
-    dijkstra_result = dijkstra.plan(start_state, max_iterations=20000)
+    # Use robot_radius=2.0 to account for robot size (wheel_base=3)
+    dijkstra = DijkstraPlanner(world, grid_size=0.5, robot_radius=2.0, debug=dijkstra_debug)
+    dijkstra_result = dijkstra.plan(start_state[:2], goal)
     
-    if dijkstra_result['success']:
-        dijkstra_traj = dijkstra_result['trajectory']
-        # Re-compute length from actual trajectory points for fair comparison
+    if dijkstra_result and dijkstra_result['success']:
+        geometric_path = dijkstra_result['trajectory']
+        print(f"✓ Geometric path found: {dijkstra_result['path_length']:.1f}m")
+        
+        # Simulate robot following this path
+        print("  Simulating robot following Dijkstra path...")
+        robot = MobileRobot()
+        # Pass start_state to ensure correct initial heading
+        dijkstra_traj, success = follow_path(robot, geometric_path, world, start_state)
+        
         dijkstra_length = compute_path_length(dijkstra_traj)
         
         results['Dijkstra'] = {
             'trajectory': dijkstra_traj,
+            'geometric_path': geometric_path,
             'path_length': dijkstra_length,
             'ratio': dijkstra_length / straight_dist,
-            'success': True
+            'success': success
         }
-        print(f"✓ Dijkstra path: {dijkstra_length:.1f}m (ratio: {dijkstra_length/straight_dist:.2f})")
+        print(f"✓ Robot Trajectory: {dijkstra_length:.1f}m (ratio: {dijkstra_length/straight_dist:.2f})")
     else:
-        print("✗ Dijkstra failed!")
-        return None
+        print("✗ Dijkstra failed (No path found)!")
+        results['Dijkstra'] = {
+            'trajectory': None,
+            'geometric_path': None,
+            'path_length': float('inf'),
+            'ratio': float('inf'),
+            'success': False
+        }
     
     # 2. PPO (Learned Path)
     print("\n" + "="*60)
@@ -116,31 +199,26 @@ def compare_dijkstra_vs_ppo(goal=(50.0, 75.0), start_state=[50.0, 10.0, np.deg2r
         print(f"✓ Loaded model: {ppo_model_path}")
     except:
         print(f"✗ Model not found: {ppo_model_path}")
-        if train_ppo_if_missing:
-            print("  Training new model...")
-            # Import and train here if needed
-            print("  ERROR: Training not implemented in this script")
-            print("  Run: python train_ppo.py first")
-        return None
-    
-    ppo_traj, ppo_length, ppo_success = evaluate_ppo(ppo_robot, world, start_state, goal)
-    
-    if ppo_success:
+        results['PPO'] = {
+            'trajectory': None,
+            'path_length': 0,
+            'ratio': 0,
+            'success': False
+        }
+    else:
+        ppo_traj, ppo_length, ppo_success = evaluate_ppo(ppo_robot, world, start_state, goal)
+        
         results['PPO'] = {
             'trajectory': ppo_traj,
             'path_length': ppo_length,
-            'ratio': ppo_length / straight_dist,
-            'success': True
+            'ratio': ppo_length / straight_dist if ppo_length != float('inf') else float('inf'),
+            'success': ppo_success
         }
-        print(f"✓ PPO path: {ppo_length:.1f}m (ratio: {ppo_length/straight_dist:.2f})")
-    else:
-        print("✗ PPO failed to reach goal")
-        results['PPO'] = {'success': False}
-    
-    # Comparison
-    if not all(results[k]['success'] for k in results):
-        print("\n✗ Cannot compare - one method failed")
-        return results
+        
+        if ppo_success:
+            print(f"✓ PPO path: {ppo_length:.1f}m (ratio: {ppo_length/straight_dist:.2f})")
+        else:
+            print("✗ PPO failed to reach goal")
     
     # Visualization
     print("\n" + "="*60)
@@ -158,17 +236,22 @@ def compare_dijkstra_vs_ppo(goal=(50.0, 75.0), start_state=[50.0, 10.0, np.deg2r
     ax.plot([start_state[0], goal[0]], [start_state[1], goal[1]], 
            'gray', linestyle=':', linewidth=2, alpha=0.5, label=f'Straight ({straight_dist:.1f}m)')
     
-    # Dijkstra
-    ax.plot(results['Dijkstra']['trajectory'][:, 0], 
-           results['Dijkstra']['trajectory'][:, 1],
-           'b-', linewidth=2.5, alpha=0.7, 
-           label=f"Dijkstra ({results['Dijkstra']['path_length']:.1f}m)")
+    # Dijkstra Geometric (Reference)
+    if results['Dijkstra']['geometric_path'] is not None:
+        gp = results['Dijkstra']['geometric_path']
+        ax.plot(gp[:, 0], gp[:, 1], 'c--', linewidth=2, alpha=0.8, label='Dijkstra (Geometric)')
+
+    # Dijkstra Robot
+    if results['Dijkstra']['trajectory'] is not None:
+        dt = results['Dijkstra']['trajectory']
+        ax.plot(dt[:, 0], dt[:, 1], 'b-', linewidth=2.5, alpha=0.7, 
+               label=f"Dijkstra Robot ({results['Dijkstra']['path_length']:.1f}m)")
     
     # PPO
-    ax.plot(results['PPO']['trajectory'][:, 0], 
-           results['PPO']['trajectory'][:, 1],
-           'g-', linewidth=2.5, alpha=0.7, 
-           label=f"PPO ({results['PPO']['path_length']:.1f}m)")
+    if results['PPO']['trajectory'] is not None:
+        pt = results['PPO']['trajectory']
+        label = f"PPO ({results['PPO']['path_length']:.1f}m)" if results['PPO']['success'] else "PPO (Failed)"
+        ax.plot(pt[:, 0], pt[:, 1], 'g-', linewidth=2.5, alpha=0.7, label=label)
     
     ax.scatter(start_state[0], start_state[1], c='green', s=200, marker='o', 
               label='Start', zorder=10, edgecolors='black', linewidths=2)
@@ -185,21 +268,27 @@ def compare_dijkstra_vs_ppo(goal=(50.0, 75.0), start_state=[50.0, 10.0, np.deg2r
     
     # Bar chart
     ax = axes[1]
-    methods = ['Straight\nLine', 'Dijkstra\n(Optimal)', 'PPO\n(Learned)']
+    methods = ['Straight\nLine', 'Dijkstra\n(Robot)', 'PPO\n(Learned)']
     lengths = [straight_dist, results['Dijkstra']['path_length'], results['PPO']['path_length']]
+    
+    # Handle infinite lengths for plotting
+    plot_lengths = [l if l != float('inf') else 0 for l in lengths]
+    
     colors = ['gray', 'blue', 'green']
     
-    bars = ax.bar(methods, lengths, color=colors, alpha=0.7, edgecolor='black', linewidth=2)
+    bars = ax.bar(methods, plot_lengths, color=colors, alpha=0.7, edgecolor='black', linewidth=2)
     
     for bar, length in zip(bars, lengths):
         height = bar.get_height()
+        text = f'{length:.1f}m' if length != float('inf') else 'Failed'
         ax.text(bar.get_x() + bar.get_width()/2., height + 2,
-                f'{length:.1f}m', ha='center', va='bottom', fontweight='bold', fontsize=11)
+                text, ha='center', va='bottom', fontweight='bold', fontsize=11)
     
     ax.set_ylabel('Path Length [m]', fontsize=11)
     ax.set_title('Path Length Comparison', fontweight='bold', fontsize=12)
     ax.grid(True, alpha=0.3, axis='y')
-    ax.set_ylim(0, max(lengths) * 1.15)
+    if max(plot_lengths) > 0:
+        ax.set_ylim(0, max(plot_lengths) * 1.15)
     
     plt.tight_layout()
     plt.savefig('shortest_path_comparison.png', dpi=150, bbox_inches='tight')
@@ -213,25 +302,23 @@ def compare_dijkstra_vs_ppo(goal=(50.0, 75.0), start_state=[50.0, 10.0, np.deg2r
     print(f"\n{'Method':<20} {'Path Length':<15} {'vs Straight':<15} {'vs Optimal':<15}")
     print("-" * 70)
     print(f"{'Straight Line':<20} {straight_dist:<15.1f} {'1.00x':<15} {'-':<15}")
-    print(f"{'Dijkstra (Optimal)':<20} {results['Dijkstra']['path_length']:<15.1f} "
-          f"{results['Dijkstra']['ratio']:<15.2f} {'1.00x':<15}")
-    print(f"{'PPO (Learned)':<20} {results['PPO']['path_length']:<15.1f} "
-          f"{results['PPO']['ratio']:<15.2f} "
-          f"{results['PPO']['path_length'] / results['Dijkstra']['path_length']:<15.2f}")
     
-    ppo_vs_optimal = results['PPO']['path_length'] / results['Dijkstra']['path_length']
+    d_len = results['Dijkstra']['path_length']
+    d_ratio = results['Dijkstra']['ratio']
+    d_str = f"{d_len:<15.1f}" if d_len != float('inf') else "Failed         "
+    d_rat_str = f"{d_ratio:<15.2f}" if d_len != float('inf') else "-              "
+    print(f"{'Dijkstra (Robot)':<20} {d_str} {d_rat_str} {'1.00x':<15}")
     
-    print("\n" + "="*70)
-    print(f"PPO vs Dijkstra: {ppo_vs_optimal:.2f}x")
+    p_len = results['PPO']['path_length']
+    p_ratio = results['PPO']['ratio']
+    p_str = f"{p_len:<15.1f}" if p_len != float('inf') else "Failed         "
+    p_rat_str = f"{p_ratio:<15.2f}" if p_len != float('inf') else "-              "
     
-    if ppo_vs_optimal <= 1.10:
-        print("✓ EXCELLENT: PPO matches optimal (≤10% longer)")
-    elif ppo_vs_optimal <= 1.25:
-        print("✓ GOOD: PPO is near-optimal (10-25% longer)")
-    elif ppo_vs_optimal <= 1.50:
-        print("⚠ FAIR: PPO is reasonable (25-50% longer)")
-    else:
-        print("✗ POOR: PPO path is much longer (>50% vs optimal)")
+    vs_opt = "-"
+    if p_len != float('inf') and d_len != float('inf') and d_len > 0:
+        vs_opt = f"{p_len / d_len:<15.2f}"
+        
+    print(f"{'PPO (Learned)':<20} {p_str} {p_rat_str} {vs_opt}")
     
     print("="*70)
     
@@ -241,7 +328,7 @@ def compare_dijkstra_vs_ppo(goal=(50.0, 75.0), start_state=[50.0, 10.0, np.deg2r
 if __name__ == "__main__":
     results = compare_dijkstra_vs_ppo(
         goal=(50.0, 75.0),
-        start_state=[50.0, 10.0, np.deg2rad(90)],
+        start_state=[2.0, 2.0, np.deg2rad(90)],
         ppo_model_path='ppo_model.pth',
         dijkstra_debug=True
     )
