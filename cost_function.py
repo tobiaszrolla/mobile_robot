@@ -20,7 +20,10 @@ def compute_cost(state, control, goal, world=None, weights=None):
         weights['w_energy'] * energy
     )
 
-    if world is not None and world.check_collision(state[:2]):
+
+
+    if world and world.check_collision(state[:2]):
+        print("----------------------------------------------------------detected")
         cost += 100000
 
     return cost
